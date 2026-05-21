@@ -3,8 +3,13 @@ ResumeAI Bot — Telegram Bot powered by Google Gemini (Free API)
 Co-founders: You + Claude
 """
 
-import logging
+import sys
 import os
+
+# Ensure the project root is always on the path (fixes Railway deployment)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
