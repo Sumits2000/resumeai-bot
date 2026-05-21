@@ -15,7 +15,7 @@ FREE_DAILY_LIMIT: int  = 2      # free resumes per user per day
 PRO_MONTHLY_PRICE: int = 399    # ₹ per month
 
 # ── Gemini model (free tier) ──────────────────────────────────────────────────
-GEMINI_MODEL: str = "gemini-2.5-flash-preview-05-20"
+GEMINI_MODEL: str = "gemini-2.5-flash"
 
 # ── Validation ────────────────────────────────────────────────────────────────
 if not TELEGRAM_BOT_TOKEN:
