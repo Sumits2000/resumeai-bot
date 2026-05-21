@@ -348,32 +348,38 @@ async def generate_output(update: Update, context: ContextTypes.DEFAULT_TYPE):
     limiter.increment(user_id)
     db.increment_resume_count(user_id)
 
-    # Send each result — text preview + Word file
-    for title, content, doc_type in results:
-        # 1. Send text preview (first 800 chars so user can see it immediately)
-        preview = content[:800] + ("\n\n_...continued in Word file below_" if len(content) > 800 else "")
-        await query.message.reply_text(
-            f"{title}\n\n{preview}",
-            parse_mode="Markdown"
-        )
+    import io as _io
+
+    # Send each result — full text in chunks + Word file
+    for title, text_content, doc_type in results:
+        # 1. Send FULL text split into Telegram-safe chunks
+        header = f"{title}\n\n"
+        first = True
+        for chunk in split_message(text_content, 3800):
+            msg = (header + chunk) if first else chunk
+            await query.message.reply_text(msg, parse_mode="Markdown")
+            first = False
 
         # 2. Generate and send .docx file
+        docx_msg = await query.message.reply_text("📎 Creating your Word file...")
         try:
-            docx_msg = await query.message.reply_text("📎 Creating your Word file...")
-            docx_bytes = await generate_docx(content, doc_type)
+            docx_bytes = await generate_docx(text_content, doc_type)
             fname = "Resume.docx" if doc_type == "resume" else "Cover_Letter.docx"
-            import io
             await query.message.reply_document(
-                document=io.BytesIO(docx_bytes),
+                document=_io.BytesIO(docx_bytes),
                 filename=fname,
-                caption=f"✅ Your *{fname}* — open in Word or Google Docs to edit!",
+                caption=(
+                    f"✅ Here is your *{fname}*\n"
+                    f"Open in Microsoft Word or Google Docs to personalise and export as PDF!"
+                ),
                 parse_mode="Markdown",
             )
             await docx_msg.delete()
         except Exception as e:
-            logger.error(f"DOCX error for user {user_id}: {e}")
-            await query.message.reply_text(
-                "⚠️ Word file generation failed — but your text above is ready to copy-paste into Word!",
+            logger.error(f"DOCX error for user {user_id}: {e}", exc_info=True)
+            await docx_msg.edit_text(
+                "⚠️ Word file couldn\'t be created right now.\n"
+                "Your full text above is ready — paste it into Word or Google Docs!"
             )
 
     # Referral nudge
