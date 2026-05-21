@@ -21,6 +21,7 @@ from telegram.ext import (
     ContextTypes,
 )
 from utils.gemini import generate_resume, generate_cover_letter
+from utils.docx_maker import generate_docx
 from utils.database import Database
 from utils.rate_limiter import RateLimiter
 from config import (
@@ -307,7 +308,7 @@ async def generate_output(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     thinking_msg = await query.message.reply_text("⏳ Generating your content with AI... please wait!")
 
-    results = []
+    results = []   # list of (title, text, doc_type)
     error = None
 
     try:
@@ -318,7 +319,7 @@ async def generate_output(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 skills=user_data.get("skills", ""),
                 education=user_data.get("education", ""),
             )
-            results.append(("📄 *YOUR RESUME*", resume_text))
+            results.append(("📄 *YOUR RESUME*", resume_text, "resume"))
 
         if choice in ("out_cover", "out_both"):
             cover_text = await generate_cover_letter(
@@ -326,7 +327,7 @@ async def generate_output(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 experience=user_data.get("experience", ""),
                 skills=user_data.get("skills", ""),
             )
-            results.append(("✉️ *COVER LETTER*", cover_text))
+            results.append(("✉️ *COVER LETTER*", cover_text, "cover"))
 
     except Exception as e:
         logger.error(f"Generation error for user {user_id}: {e}")
@@ -347,26 +348,45 @@ async def generate_output(update: Update, context: ContextTypes.DEFAULT_TYPE):
     limiter.increment(user_id)
     db.increment_resume_count(user_id)
 
-    # Send each result
-    for title, content in results:
-        # Telegram message limit is 4096 chars
-        full_message = f"{title}\n\n{content}"
-        for chunk in split_message(full_message, 4000):
-            await query.message.reply_text(chunk, parse_mode="Markdown")
+    # Send each result — text preview + Word file
+    for title, content, doc_type in results:
+        # 1. Send text preview (first 800 chars so user can see it immediately)
+        preview = content[:800] + ("\n\n_...continued in Word file below_" if len(content) > 800 else "")
+        await query.message.reply_text(
+            f"{title}\n\n{preview}",
+            parse_mode="Markdown"
+        )
+
+        # 2. Generate and send .docx file
+        try:
+            docx_msg = await query.message.reply_text("📎 Creating your Word file...")
+            docx_bytes = await generate_docx(content, doc_type)
+            fname = "Resume.docx" if doc_type == "resume" else "Cover_Letter.docx"
+            import io
+            await query.message.reply_document(
+                document=io.BytesIO(docx_bytes),
+                filename=fname,
+                caption=f"✅ Your *{fname}* — open in Word or Google Docs to edit!",
+                parse_mode="Markdown",
+            )
+            await docx_msg.delete()
+        except Exception as e:
+            logger.error(f"DOCX error for user {user_id}: {e}")
+            await query.message.reply_text(
+                "⚠️ Word file generation failed — but your text above is ready to copy-paste into Word!",
+            )
 
     # Referral nudge
     _, remaining = await check_limit(user_id)
-    referrals = db.get_referral_count(user_id)
     bot_username = (await context.bot.get_me()).username
 
     nudge = (
-        f"\n\n✨ *Tip:* Copy-paste into Google Docs or Word for final formatting.\n\n"
-        f"🔗 Know someone job-hunting? Share your referral link — both of you benefit!\n"
+        f"\n\n🔗 Know someone job-hunting? Share your referral link — get *7 days Pro free* after 3 referrals!\n"
         f"`https://t.me/{bot_username}?start=ref_{user_id}`"
     )
 
     await query.message.reply_text(
-        f"✅ Done! {'You have ' + str(remaining) + ' free generation(s) left today.' if remaining < FREE_DAILY_LIMIT else ''}{nudge}",
+        f"✅ Done! {'You have *' + str(remaining) + '* free generation(s) left today.' if remaining < FREE_DAILY_LIMIT else '🌟 Unlimited generations active!'}{nudge}",
         parse_mode="Markdown",
         reply_markup=main_menu_keyboard(),
     )
