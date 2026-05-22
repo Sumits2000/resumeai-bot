@@ -352,15 +352,14 @@ async def generate_output(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Send each result — full text in chunks + Word file
     for title, text_content, doc_type in results:
-        # 1. Send FULL text split into Telegram-safe chunks
-        header = f"{title}\n\n"
-        first = True
-        for chunk in split_message(text_content, 3800):
-            msg = (header + chunk) if first else chunk
-            await query.message.reply_text(msg, parse_mode="Markdown")
-            first = False
+        # 1. Send header separately (Markdown safe)
+        await query.message.reply_text(title, parse_mode="Markdown")
 
-        # 2. Generate and send .docx file
+        # 2. Send full plain text in chunks — no Markdown to avoid parse failures
+        for chunk in split_message(text_content, 3800):
+            await query.message.reply_text(chunk)
+
+        # 3. Generate and send .docx
         docx_msg = await query.message.reply_text("📎 Creating your Word file...")
         try:
             docx_bytes = await generate_docx(text_content, doc_type)
@@ -368,20 +367,15 @@ async def generate_output(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_document(
                 document=_io.BytesIO(docx_bytes),
                 filename=fname,
-                caption=(
-                    f"✅ Here is your *{fname}*\n"
-                    f"Open in Microsoft Word or Google Docs to personalise and export as PDF!"
-                ),
-                parse_mode="Markdown",
+                caption=f"✅ Your {fname} is ready! Open in Word or Google Docs to edit and save as PDF.",
             )
             await docx_msg.delete()
         except Exception as e:
-            logger.error(f"DOCX error for user {user_id}: {e}", exc_info=True)
+            err_detail = str(e)
+            logger.error(f"DOCX error for user {user_id}: {err_detail}", exc_info=True)
             await docx_msg.edit_text(
-                "⚠️ Word file couldn\'t be created right now.\n"
-                "Your full text above is ready — paste it into Word or Google Docs!"
+                f"⚠️ Word file error: {err_detail[:300]}\n\nYour text above is complete — paste into Word or Google Docs!"
             )
-
     # Referral nudge
     _, remaining = await check_limit(user_id)
     bot_username = (await context.bot.get_me()).username

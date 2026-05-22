@@ -3,16 +3,24 @@
 // Called by Python: node make_resume.js <type> <input.txt> <output.docx>
 
 const path = require('path');
+const fs = require('fs');
+const { execSync } = require('child_process');
 
-// Always resolve docx from THIS file's directory (works on Railway + local)
-const docxPath = path.join(__dirname, 'node_modules', 'docx');
+// Find docx module — local node_modules first, then global, then auto-install
+function loadDocx() {
+  const localPath = path.join(__dirname, 'node_modules', 'docx');
+  if (fs.existsSync(localPath)) return require(localPath);
+  try { return require('docx'); } catch(e) {}
+  console.error('docx not found, installing...');
+  execSync('npm install docx', { cwd: __dirname, stdio: 'inherit' });
+  return require(path.join(__dirname, 'node_modules', 'docx'));
+}
+
 const {
   Document, Packer, Paragraph, TextRun,
   AlignmentType, BorderStyle, ShadingType,
   LevelFormat, UnderlineType,
-} = require(docxPath);
-
-const fs = require('fs');
+} = loadDocx();
 
 const [,, type, inputFile, outputFile] = process.argv;
 
