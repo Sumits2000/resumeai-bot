@@ -27,7 +27,10 @@ from utils.rate_limiter import RateLimiter
 from config import (
     TELEGRAM_BOT_TOKEN,
     FREE_DAILY_LIMIT,
-    PRO_MONTHLY_PRICE,
+    PLANS,
+    ADMIN_IDS,
+    UPI_ID,
+    SUPPORT_USERNAME,
 )
 
 # ── Logging ──────────────────────────────────────────────────────────────────
@@ -188,35 +191,216 @@ async def refer_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    referrals = db.get_referral_count(user_id)
     user = db.get_user(user_id)
-
     send = update.callback_query.message.reply_text if update.callback_query else update.message.reply_text
+
     if user and user.get("is_pro"):
+        import datetime
+        expiry = user.get("pro_expires", "")
+        exp_str = ""
+        if expiry:
+            try:
+                exp_dt = datetime.datetime.fromisoformat(expiry)
+                exp_str = f"\nExpires: *{exp_dt.strftime('%d %b %Y')}*"
+            except Exception:
+                pass
         await send(
-            "⭐ You're already on Pro! Enjoy unlimited resumes.",
+            f"✅ You already have an active Pro subscription!{exp_str}\n\nEnjoy unlimited resumes & cover letters! 🎉",
+            parse_mode="Markdown",
             reply_markup=back_keyboard()
         )
         return
 
-    referral_text = ""
-    if referrals >= 3:
-        referral_text = "\n\n🎁 *You have 3 referrals — claim 7 days Pro free!*\nContact @YourSupportHandle"
+    # Build plan selection keyboard
+    buttons = []
+    for plan_id, plan in PLANS.items():
+        popular = " 🔥 Popular" if plan.get("popular") else ""
+        buttons.append([InlineKeyboardButton(
+            f"{plan['emoji']} {plan['label']} — ₹{plan['price']}{popular}",
+            callback_data=f"plan_{plan_id}"
+        )])
+    buttons.append([InlineKeyboardButton("🔙 Back", callback_data="main_menu")])
+
+    referrals = db.get_referral_count(user_id)
+    ref_text = "\n🎁 *You have 3 referrals!* Use /refer to claim 7 days free." if referrals >= 3 else ""
 
     text = (
         f"⭐ *Upgrade to ResumeAI Pro*\n\n"
-        f"*₹399/month* — cancel anytime\n\n"
         f"✅ Unlimited resumes & cover letters\n"
-        f"✅ ATS compatibility score\n"
-        f"✅ LinkedIn profile tips\n"
-        f"✅ 5 premium templates\n"
+        f"✅ Formatted Word file (.docx)\n"
+        f"✅ ATS compatibility tips\n"
         f"✅ Priority AI generation\n"
-        f"{referral_text}\n\n"
-        f"💳 To subscribe, contact @YourSupportHandle or pay via UPI:\n"
-        f"`your-upi@bank`\n\n"
-        f"Send payment screenshot to activate instantly."
+        f"{ref_text}\n\n"
+        f"*Choose your plan:*"
     )
-    await send(text, parse_mode="Markdown", reply_markup=back_keyboard())
+    await send(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
+
+
+async def show_payment_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show UPI payment details for selected plan."""
+    query = update.callback_query
+    await query.answer()
+    plan_id = query.data.replace("plan_", "")
+    plan = PLANS.get(plan_id)
+    if not plan:
+        await query.message.reply_text("Invalid plan. Please try again.")
+        return
+
+    user_id = update.effective_user.id
+    text = (
+        f"{plan['emoji']} *{plan['label']} Plan — ₹{plan['price']}*\n"
+        f"_{plan['desc']}_\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"💳 *How to pay:*\n\n"
+        f"1️⃣ Open any UPI app (GPay, PhonePe, Paytm)\n"
+        f"2️⃣ Send *₹{plan['price']}* to:\n"
+        f"   `{UPI_ID}`\n\n"
+        f"3️⃣ Take a screenshot of the payment\n"
+        f"4️⃣ Send the screenshot to @{SUPPORT_USERNAME}\n"
+        f"   with your *Telegram User ID*: `{user_id}`\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"⚡ Activation within *15 minutes* after payment confirmation.\n\n"
+        f"❓ Questions? Message @{SUPPORT_USERNAME}"
+    )
+    await query.message.reply_text(
+        text,
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ I have paid — notify admin", callback_data=f"paid_{plan_id}")],
+            [InlineKeyboardButton("🔙 Choose different plan", callback_data="upgrade")],
+        ])
+    )
+
+
+async def notify_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """User confirms payment — notify admin and show confirmation."""
+    query = update.callback_query
+    await query.answer()
+    plan_id = query.data.replace("paid_", "")
+    plan = PLANS.get(plan_id)
+    user = update.effective_user
+    user_id = user.id
+
+    # Notify all admins
+    admin_msg = (
+        f"💰 *New Payment Claimed!*\n\n"
+        f"User: {user.first_name} (@{user.username or 'no username'})\n"
+        f"User ID: `{user_id}`\n"
+        f"Plan: {plan['emoji']} {plan['label']} — ₹{plan['price']}\n"
+        f"Duration: {plan['days']} days\n\n"
+        f"To activate, send:\n"
+        f"`/activate {user_id} {plan_id}`"
+    )
+    for admin_id in ADMIN_IDS:
+        try:
+            await context.bot.send_message(admin_id, admin_msg, parse_mode="Markdown")
+        except Exception as e:
+            logger.warning(f"Could not notify admin {admin_id}: {e}")
+
+    await query.message.reply_text(
+        f"✅ *Payment notification sent!*\n\n"
+        f"Our team will verify and activate your *{plan['label']}* plan within 15 minutes.\n\n"
+        f"Your User ID for reference: `{user_id}`\n\n"
+        f"Questions? Message @{SUPPORT_USERNAME}",
+        parse_mode="Markdown",
+        reply_markup=back_keyboard()
+    )
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ADMIN COMMANDS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def activate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin only: /activate <user_id> <plan_id>"""
+    admin_id = update.effective_user.id
+    if admin_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+
+    args = context.args
+    if len(args) < 2:
+        await update.message.reply_text(
+            "Usage: `/activate <user_id> <plan_id>`\n\n"
+            "Plan IDs: `weekly` (7d) | `monthly` (30d) | `quarterly` (90d)",
+            parse_mode="Markdown"
+        )
+        return
+
+    try:
+        target_id = int(args[0])
+        plan_id = args[1].lower()
+    except ValueError:
+        await update.message.reply_text("❌ Invalid user_id. Must be a number.")
+        return
+
+    plan = PLANS.get(plan_id)
+    if not plan:
+        await update.message.reply_text(f"❌ Unknown plan: `{plan_id}`. Use: weekly / monthly / quarterly", parse_mode="Markdown")
+        return
+
+    db.activate_pro(target_id, days=plan["days"])
+
+    # Notify the user
+    try:
+        await context.bot.send_message(
+            target_id,
+            f"🎉 *Your {plan['emoji']} {plan['label']} plan is now active!*\n\n"
+            f"✅ Unlimited resumes & cover letters for *{plan['days']} days*\n\n"
+            f"Use /resume or tap 📄 Create Resume to get started!",
+            parse_mode="Markdown"
+        )
+        user_notified = "✅ User notified."
+    except Exception:
+        user_notified = "⚠️ Could not message user (they may not have started the bot)."
+
+    await update.message.reply_text(
+        f"✅ *Activated!*\n\n"
+        f"User ID: `{target_id}`\n"
+        f"Plan: {plan['emoji']} {plan['label']} ({plan['days']} days)\n\n"
+        f"{user_notified}",
+        parse_mode="Markdown"
+    )
+
+
+async def deactivate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin only: /deactivate <user_id>"""
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Not authorized.")
+        return
+    args = context.args
+    if not args:
+        await update.message.reply_text("Usage: `/deactivate <user_id>`", parse_mode="Markdown")
+        return
+    try:
+        target_id = int(args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Invalid user_id.")
+        return
+    db._expire_pro(target_id)
+    await update.message.reply_text(f"✅ Pro deactivated for user `{target_id}`.", parse_mode="Markdown")
+
+
+async def admin_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin only: /adminstats — show business overview."""
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Not authorized.")
+        return
+    total_users = db.get_total_users()
+    pro_users   = db.get_pro_users()
+    text = (
+        f"📊 *ResumeAI Business Stats*\n\n"
+        f"👥 Total users: *{total_users}*\n"
+        f"⭐ Pro users: *{pro_users}*\n"
+        f"🆓 Free users: *{total_users - pro_users}*\n\n"
+        f"💰 Est. monthly revenue: *₹{pro_users * 199}*\n\n"
+        f"Admin commands:\n"
+        f"`/activate <id> <plan>` — activate pro\n"
+        f"`/deactivate <id>` — remove pro\n"
+        f"`/adminstats` — this screen"
+    )
+    await update.message.reply_text(text, parse_mode="Markdown")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -431,6 +615,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data in ("start_resume", "start_cover"):
         context.user_data.clear()
         await resume_start(update, context)
+    elif data.startswith("plan_"):
+        await show_payment_details(update, context)
+    elif data.startswith("paid_"):
+        await notify_payment(update, context)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -489,6 +677,10 @@ def main():
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("refer", refer_command))
     app.add_handler(CommandHandler("upgrade", upgrade_command))
+    # Admin commands
+    app.add_handler(CommandHandler("activate", activate_command))
+    app.add_handler(CommandHandler("deactivate", deactivate_command))
+    app.add_handler(CommandHandler("adminstats", admin_stats_command))
     app.add_handler(conv)
     # Generic button handler (for menus outside the conversation)
     app.add_handler(CallbackQueryHandler(button_handler))
