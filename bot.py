@@ -144,7 +144,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• List your top 3–5 achievements, not just duties\n"
         "• Mention the tech stack or tools you use\n"
     )
-    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=back_keyboard())
+    send = update.callback_query.message.reply_text if update.callback_query else update.message.reply_text
+    await send(text, parse_mode="Markdown", reply_markup=back_keyboard())
 
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -163,7 +164,8 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Friends referred: *{referrals}*\n\n"
         f"{'✅ Unlimited resumes active!' if is_pro else f'Refer 3 friends → get 7 days Pro free!'}"
     )
-    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=back_keyboard())
+    send = update.callback_query.message.reply_text if update.callback_query else update.message.reply_text
+    await send(text, parse_mode="Markdown", reply_markup=back_keyboard())
 
 
 async def refer_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -180,7 +182,8 @@ async def refer_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ Friends referred: *{referrals}/3*\n"
         f"{'🎉 You qualify for 7 days Pro free! Use /upgrade to claim.' if referrals >= 3 else f'Refer {needed} more friend(s) → 7 days Pro FREE!'}"
     )
-    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=back_keyboard())
+    send = update.callback_query.message.reply_text if update.callback_query else update.message.reply_text
+    await send(text, parse_mode="Markdown", reply_markup=back_keyboard())
 
 
 async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -188,8 +191,9 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     referrals = db.get_referral_count(user_id)
     user = db.get_user(user_id)
 
+    send = update.callback_query.message.reply_text if update.callback_query else update.message.reply_text
     if user and user.get("is_pro"):
-        await update.message.reply_text(
+        await send(
             "⭐ You're already on Pro! Enjoy unlimited resumes.",
             reply_markup=back_keyboard()
         )
@@ -212,7 +216,7 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"`your-upi@bank`\n\n"
         f"Send payment screenshot to activate instantly."
     )
-    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=back_keyboard())
+    await send(text, parse_mode="Markdown", reply_markup=back_keyboard())
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -410,11 +414,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
+    send = query.message.reply_text   # always use query.message for buttons
 
     if data == "main_menu":
-        await query.message.reply_text(
-            "🏠 Main Menu", reply_markup=main_menu_keyboard()
-        )
+        await send("🏠 Main Menu", reply_markup=main_menu_keyboard())
     elif data == "upgrade":
         await upgrade_command(update, context)
     elif data == "stats":
@@ -424,11 +427,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "help":
         await help_command(update, context)
     elif data == "restart":
-        await query.message.reply_text(
-            "🔄 Let's start fresh!", reply_markup=main_menu_keyboard()
-        )
+        await send("🔄 Let\'s start fresh!", reply_markup=main_menu_keyboard())
     elif data in ("start_resume", "start_cover"):
-        # Hand off to conversation — re-trigger resume_start
         context.user_data.clear()
         await resume_start(update, context)
 
