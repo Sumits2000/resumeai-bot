@@ -1,235 +1,242 @@
+'use strict';
+// ResumeAI — DOCX generator
+// Called by Python: node make_resume.js <type> <input.txt> <output.docx>
+
+const path = require('path');
+
+// Always resolve docx from THIS file's directory (works on Railway + local)
+const docxPath = path.join(__dirname, 'node_modules', 'docx');
 const {
-  Document, Packer, Paragraph, TextRun, AlignmentType,
-  LevelFormat, HeadingLevel, BorderStyle, UnderlineType,
-  ShadingType, TabStopType, TabStopPosition
-} = require('docx');
+  Document, Packer, Paragraph, TextRun,
+  AlignmentType, BorderStyle, ShadingType,
+  LevelFormat, UnderlineType,
+} = require(docxPath);
+
 const fs = require('fs');
 
-// Read inputs from args
-const type = process.argv[2];        // "resume" or "cover"
-const contentFile = process.argv[3]; // path to text file with content
-const outFile = process.argv[4];     // output path
+const [,, type, inputFile, outputFile] = process.argv;
 
-const content = fs.readFileSync(contentFile, 'utf8');
+if (!type || !inputFile || !outputFile) {
+  console.error('Usage: node make_resume.js <resume|cover> <input.txt> <output.docx>');
+  process.exit(1);
+}
 
-// ── Color palette ────────────────────────────────────────────────────────────
-const ACCENT   = "1D5C8E";   // professional dark blue
-const ACCENT2  = "2E86C1";   // section rule color
-const LIGHT    = "EBF5FB";   // header background
-const DARK     = "1A252F";   // name text
-const GRAY     = "5D6D7E";   // subtext
+const raw = fs.readFileSync(inputFile, 'utf8');
+
+// ── Design tokens ────────────────────────────────────────────────────────────
+const C = {
+  accent:   '1D5C8E',
+  accent2:  '2980B9',
+  dark:     '1A252F',
+  gray:     '5D6D7E',
+  lightbg:  'EBF5FB',
+  black:    '1C1C1C',
+};
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-function sectionRule() {
-  return new Paragraph({
-    border: { bottom: { style: BorderStyle.SINGLE, size: 8, color: ACCENT2, space: 4 } },
-    spacing: { before: 0, after: 120 },
-    children: []
-  });
-}
+const empty = (sp = 80) => new Paragraph({ spacing: { before: 0, after: sp }, children: [] });
 
-function sectionHeading(text) {
-  return new Paragraph({
-    spacing: { before: 280, after: 60 },
-    children: [new TextRun({
-      text: text.toUpperCase(),
-      bold: true,
-      size: 22,
-      color: ACCENT,
-      font: "Calibri",
-      characterSpacing: 40,
-    })]
-  });
-}
+const rule = () => new Paragraph({
+  border: { bottom: { style: BorderStyle.SINGLE, size: 10, color: C.accent2, space: 3 } },
+  spacing: { before: 0, after: 100 },
+  children: [],
+});
 
-function bulletLine(text) {
-  return new Paragraph({
-    numbering: { reference: "bullets", level: 0 },
-    spacing: { before: 40, after: 40 },
-    children: [new TextRun({ text: text.replace(/^[•\-\*]\s*/, '').trim(), size: 20, font: "Calibri", color: "1C1C1C" })]
-  });
-}
+const sectionHead = (text) => new Paragraph({
+  spacing: { before: 240, after: 60 },
+  children: [new TextRun({
+    text: text.toUpperCase(),
+    bold: true, size: 22,
+    color: C.accent, font: 'Calibri',
+    characterSpacing: 50,
+  })],
+});
 
-function bodyLine(text, opts = {}) {
-  return new Paragraph({
-    spacing: { before: 40, after: 40 },
-    children: [new TextRun({
-      text,
-      size: opts.size || 20,
-      bold: opts.bold || false,
-      italic: opts.italic || false,
-      color: opts.color || "1C1C1C",
-      font: "Calibri",
-    })]
-  });
-}
+const bullet = (text) => new Paragraph({
+  numbering: { reference: 'bullets', level: 0 },
+  spacing: { before: 30, after: 30 },
+  children: [new TextRun({
+    text: text.replace(/^[•▸\-\*]\s*/, '').trim(),
+    size: 20, font: 'Calibri', color: C.black,
+  })],
+});
 
-function emptyLine() {
-  return new Paragraph({ spacing: { before: 0, after: 60 }, children: [] });
-}
+const bodyPara = (text, opts = {}) => new Paragraph({
+  alignment: opts.align || AlignmentType.LEFT,
+  spacing: { before: opts.before || 40, after: opts.after || 40, line: opts.line || 276, lineRule: 'auto' },
+  children: [new TextRun({
+    text, size: opts.size || 20, bold: opts.bold || false,
+    italic: opts.italic || false, color: opts.color || C.black,
+    font: 'Calibri',
+  })],
+});
 
-// ── Resume parser ─────────────────────────────────────────────────────────────
-function parseResume(text) {
-  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-  const children = [];
+// ── Resume builder ────────────────────────────────────────────────────────────
+function buildResume(text) {
+  const lines = text.split('\n').map(l => l.trim());
+  const out = [];
 
-  // Header block
-  const nameLine = lines[0] || "Your Name";
-  const contactLine = lines[1] || "";
-
-  // Name block with blue background
-  children.push(new Paragraph({
-    shading: { fill: LIGHT, type: ShadingType.CLEAR },
-    spacing: { before: 0, after: 0 },
-    alignment: AlignmentType.CENTER,
-    children: [new TextRun({
-      text: nameLine.replace(/\[|\]/g, ''),
-      bold: true,
-      size: 44,
-      color: DARK,
-      font: "Calibri",
-    })]
-  }));
-
-  children.push(new Paragraph({
-    shading: { fill: LIGHT, type: ShadingType.CLEAR },
-    spacing: { before: 40, after: 200 },
-    alignment: AlignmentType.CENTER,
-    children: [new TextRun({
-      text: contactLine.replace(/\[|\]/g, ''),
-      size: 18,
-      color: GRAY,
-      font: "Calibri",
-    })]
-  }));
-
-  // Parse rest of sections
-  let i = 2;
-  const SECTION_KEYWORDS = [
-    'PROFESSIONAL SUMMARY', 'SUMMARY', 'WORK EXPERIENCE', 'EXPERIENCE',
-    'SKILLS', 'EDUCATION', 'CERTIFICATIONS', 'PROJECTS', 'ACHIEVEMENTS'
+  const SECTIONS = [
+    'PROFESSIONAL SUMMARY','SUMMARY','PROFILE',
+    'WORK EXPERIENCE','EXPERIENCE','EMPLOYMENT',
+    'SKILLS','TECHNICAL SKILLS','KEY SKILLS',
+    'EDUCATION','ACADEMIC',
+    'CERTIFICATIONS','CERTIFICATES',
+    'PROJECTS','ACHIEVEMENTS','AWARDS',
   ];
 
-  while (i < lines.length) {
-    const line = lines[i];
-    const isSection = SECTION_KEYWORDS.some(k => line.toUpperCase().startsWith(k));
+  // Header — name + contact
+  const nameLine = lines.find(l => l.length > 0) || 'Your Name';
+  const contactLine = lines.find((l, i) => i > 0 && i < 5 && l.includes('|')) || '';
 
-    if (isSection) {
-      children.push(sectionHeading(line));
-      children.push(sectionRule());
-    } else if (line.match(/^[•\-\*]/)) {
-      children.push(bulletLine(line));
-    } else if (line.includes('|') && !line.startsWith('|')) {
-      // Job title | Company | Date line
-      const parts = line.split('|').map(p => p.trim());
-      const runParts = [];
-      parts.forEach((p, idx) => {
-        if (idx === 0) runParts.push(new TextRun({ text: p, bold: true, size: 20, font: "Calibri", color: "1C1C1C" }));
-        else runParts.push(new TextRun({ text: " | " + p, size: 20, font: "Calibri", color: GRAY, italic: idx === parts.length - 1 }));
-      });
-      children.push(new Paragraph({ spacing: { before: 120, after: 40 }, children: runParts }));
-    } else if (line.startsWith('Technical:') || line.startsWith('Soft Skills:')) {
-      const [label, ...rest] = line.split(':');
-      children.push(new Paragraph({
-        spacing: { before: 60, after: 40 },
-        children: [
-          new TextRun({ text: label + ": ", bold: true, size: 20, font: "Calibri" }),
-          new TextRun({ text: rest.join(':').trim(), size: 20, font: "Calibri", color: "1C1C1C" }),
-        ]
-      }));
-    } else {
-      children.push(bodyLine(line));
-    }
-    i++;
+  out.push(new Paragraph({
+    shading: { fill: C.lightbg, type: ShadingType.CLEAR },
+    alignment: AlignmentType.CENTER,
+    spacing: { before: 0, after: 60 },
+    children: [new TextRun({
+      text: nameLine.replace(/\[|\]/g, '').replace(/^\*+|\*+$/g, ''),
+      bold: true, size: 48, color: C.dark, font: 'Calibri',
+    })],
+  }));
+
+  if (contactLine) {
+    out.push(new Paragraph({
+      shading: { fill: C.lightbg, type: ShadingType.CLEAR },
+      alignment: AlignmentType.CENTER,
+      spacing: { before: 0, after: 180 },
+      children: [new TextRun({
+        text: contactLine.replace(/\[|\]/g, ''),
+        size: 18, color: C.gray, font: 'Calibri',
+      })],
+    }));
+  } else {
+    out.push(empty(180));
   }
 
-  return children;
+  // Body lines
+  let startIdx = contactLine ? 2 : 1;
+  for (let i = startIdx; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line) { out.push(empty(60)); continue; }
+
+    const upper = line.toUpperCase().replace(/\*+/g, '').trim();
+    const isSection = SECTIONS.some(s => upper === s || upper.startsWith(s));
+
+    if (isSection) {
+      out.push(sectionHead(line.replace(/\*+/g, '').trim()));
+      out.push(rule());
+    } else if (/^[•▸\-\*]/.test(line)) {
+      out.push(bullet(line));
+    } else if (line.includes('|') && !line.startsWith('|') && line.split('|').length >= 2) {
+      // Job title | Company | Date
+      const parts = line.split('|').map(p => p.trim().replace(/\*+/g, ''));
+      const runs = [];
+      parts.forEach((p, idx) => {
+        if (idx === 0) {
+          runs.push(new TextRun({ text: p, bold: true, size: 20, font: 'Calibri', color: C.black }));
+        } else {
+          runs.push(new TextRun({ text: '  |  ' + p, size: 19, font: 'Calibri', color: C.gray, italic: idx === parts.length - 1 }));
+        }
+      });
+      out.push(new Paragraph({ spacing: { before: 140, after: 40 }, children: runs }));
+    } else if (/^(Technical|Soft Skills|Tools|Languages|Frameworks):/i.test(line)) {
+      const colon = line.indexOf(':');
+      const label = line.slice(0, colon + 1);
+      const value = line.slice(colon + 1).trim();
+      out.push(new Paragraph({
+        spacing: { before: 50, after: 40 },
+        children: [
+          new TextRun({ text: label + ' ', bold: true, size: 20, font: 'Calibri', color: C.black }),
+          new TextRun({ text: value, size: 20, font: 'Calibri', color: C.black }),
+        ],
+      }));
+    } else {
+      out.push(bodyPara(line.replace(/\*+/g, '')));
+    }
+  }
+
+  return out;
 }
 
-// ── Cover letter parser ───────────────────────────────────────────────────────
-function parseCoverLetter(text) {
+// ── Cover letter builder ──────────────────────────────────────────────────────
+function buildCover(text) {
   const lines = text.split('\n').map(l => l.trim());
-  const children = [];
+  const out = [];
 
-  // Header bar
-  children.push(new Paragraph({
-    shading: { fill: LIGHT, type: ShadingType.CLEAR },
-    spacing: { before: 0, after: 0 },
+  // Title bar
+  out.push(new Paragraph({
+    shading: { fill: C.lightbg, type: ShadingType.CLEAR },
     alignment: AlignmentType.CENTER,
-    children: [new TextRun({ text: "COVER LETTER", bold: true, size: 28, color: ACCENT, font: "Calibri", characterSpacing: 60 })]
+    spacing: { before: 0, after: 0 },
+    children: [new TextRun({
+      text: 'COVER LETTER',
+      bold: true, size: 30, color: C.accent,
+      font: 'Calibri', characterSpacing: 80,
+    })],
   }));
-  children.push(new Paragraph({
-    shading: { fill: LIGHT, type: ShadingType.CLEAR },
-    spacing: { before: 0, after: 240 },
-    border: { bottom: { style: BorderStyle.SINGLE, size: 8, color: ACCENT2, space: 6 } },
-    children: []
+  out.push(new Paragraph({
+    shading: { fill: C.lightbg, type: ShadingType.CLEAR },
+    border: { bottom: { style: BorderStyle.SINGLE, size: 10, color: C.accent2, space: 6 } },
+    spacing: { before: 0, after: 220 },
+    children: [],
   }));
 
   for (const line of lines) {
-    const t = line.trim();
-    if (!t) { children.push(emptyLine()); continue; }
+    if (!line) { out.push(empty(100)); continue; }
 
-    if (t === 'Dear Hiring Manager,') {
-      children.push(new Paragraph({
-        spacing: { before: 120, after: 80 },
-        children: [new TextRun({ text: t, bold: true, size: 22, font: "Calibri", color: DARK })]
-      }));
-    } else if (t === 'Sincerely,' || t === 'Regards,') {
-      children.push(new Paragraph({
-        spacing: { before: 200, after: 60 },
-        children: [new TextRun({ text: t, size: 20, font: "Calibri" })]
-      }));
+    if (line.toLowerCase().startsWith('dear')) {
+      out.push(bodyPara(line, { bold: true, size: 21, before: 100, after: 80 }));
+    } else if (/^(sincerely|regards|yours|warm regards)/i.test(line)) {
+      out.push(bodyPara(line, { before: 220, after: 60 }));
     } else {
-      children.push(new Paragraph({
-        alignment: AlignmentType.JUSTIFIED,
-        spacing: { before: 60, after: 60, line: 320, lineRule: "auto" },
-        children: [new TextRun({ text: t, size: 21, font: "Calibri", color: "1C1C1C" })]
-      }));
+      out.push(bodyPara(line, { align: AlignmentType.JUSTIFIED, line: 320, before: 60, after: 60 }));
     }
   }
 
-  return children;
+  return out;
 }
 
-// ── Build document ────────────────────────────────────────────────────────────
-const bodyChildren = type === 'resume' ? parseResume(content) : parseCoverLetter(content);
+// ── Assemble document ─────────────────────────────────────────────────────────
+const bodyChildren = type === 'resume' ? buildResume(raw) : buildCover(raw);
 
 const doc = new Document({
   numbering: {
     config: [{
-      reference: "bullets",
+      reference: 'bullets',
       levels: [{
         level: 0,
         format: LevelFormat.BULLET,
-        text: "▸",
+        text: '▸',
         alignment: AlignmentType.LEFT,
         style: {
-          paragraph: { indent: { left: 480, hanging: 300 } },
-          run: { font: "Calibri", color: ACCENT }
-        }
-      }]
-    }]
+          paragraph: { indent: { left: 480, hanging: 320 } },
+          run: { font: 'Calibri', color: C.accent },
+        },
+      }],
+    }],
   },
   styles: {
     default: {
-      document: { run: { font: "Calibri", size: 20, color: "1C1C1C" } }
-    }
+      document: { run: { font: 'Calibri', size: 20, color: C.black } },
+    },
   },
   sections: [{
     properties: {
       page: {
         size: { width: 12240, height: 15840 },
-        margin: { top: 900, right: 1080, bottom: 900, left: 1080 }
-      }
+        margin: { top: 900, right: 1080, bottom: 900, left: 1080 },
+      },
     },
-    children: bodyChildren
-  }]
+    children: bodyChildren,
+  }],
 });
 
-Packer.toBuffer(doc).then(buf => {
-  fs.writeFileSync(outFile, buf);
-  console.log('OK:' + outFile);
-}).catch(e => {
-  console.error('ERR:' + e.message);
-  process.exit(1);
-});
+Packer.toBuffer(doc)
+  .then(buf => {
+    fs.writeFileSync(outputFile, buf);
+    console.log('OK:' + outputFile + ':' + buf.length);
+  })
+  .catch(err => {
+    console.error('DOCX_ERR:' + err.message);
+    process.exit(1);
+  });

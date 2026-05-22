@@ -1,15 +1,10 @@
 [phases.setup]
-nixPkgs = ["python311", "nodejs_20", "nodePackages.npm"]
+nixPkgs = ["python311", "nodejs_20"]
 
 [phases.install]
 cmds = [
-  "pip install -r requirements.txt",
-  "npm install -g docx"
-]
-
-[phases.build]
-cmds = [
-  "node -e \"require('docx'); console.log('docx OK');\""
+  "npm install",
+  "pip install -r requirements.txt"
 ]
 
 [start]

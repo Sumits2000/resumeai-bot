@@ -1,125 +1,86 @@
 """
-DOCX generator — creates formatted, editable Word files for users.
-Uses Node.js + docx npm package under the hood.
+DOCX generator — calls make_resume.js using the local node_modules/docx package.
+Reliable on Railway because it uses npm install (not npm install -g).
 """
 import asyncio
 import logging
 import os
-import tempfile
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Locate make_resume.js — works both locally and on Railway
-_BASE_DIR = Path(__file__).resolve().parent.parent
-_JS_SCRIPT = _BASE_DIR / "make_resume.js"
+_BASE = Path(__file__).resolve().parent.parent      # project root
+_JS   = _BASE / 'make_resume.js'
+_NM   = _BASE / 'node_modules' / 'docx'            # local install
 
 
-def _find_node() -> str:
-    """Find the node binary — handles different Railway/local paths."""
-    for candidate in ["node", "/usr/bin/node", "/usr/local/bin/node", "/nix/store/*/bin/node"]:
-        try:
-            result = subprocess.run([candidate, "--version"],
-                                    capture_output=True, text=True, timeout=5)
-            if result.returncode == 0:
-                return candidate
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            continue
-    # Last resort — search PATH
-    import shutil
-    node = shutil.which("node")
+def _node_bin() -> str:
+    node = shutil.which('node') or shutil.which('nodejs')
     if node:
         return node
-    raise RuntimeError("node not found. Make sure nixpacks.toml includes nodejs_20.")
+    for p in ['/usr/bin/node', '/usr/local/bin/node']:
+        if Path(p).exists():
+            return p
+    raise RuntimeError('node binary not found on PATH')
 
 
-def _find_docx_module() -> str | None:
-    """Find globally installed docx npm module."""
-    for candidate in [
-        "/usr/local/lib/node_modules/docx",
-        "/usr/lib/node_modules/docx",
-        "/root/.npm-global/lib/node_modules/docx",
-        "/home/claude/.npm-global/lib/node_modules/docx",
-    ]:
-        if Path(candidate).exists():
-            return candidate
-    # Try node to find it
-    try:
-        node = _find_node()
-        result = subprocess.run(
-            [node, "-e", "console.log(require.resolve('docx'))"],
-            capture_output=True, text=True, timeout=10
+def _check_prereqs():
+    if not _JS.exists():
+        raise FileNotFoundError(f'make_resume.js not found at {_JS}')
+    if not _NM.exists():
+        raise FileNotFoundError(
+            f'node_modules/docx not found at {_NM}. '
+            'Make sure nixpacks.toml runs "npm install" during build.'
         )
-        if result.returncode == 0:
-            return str(Path(result.stdout.strip()).parent.parent)
-    except Exception:
-        pass
-    return None
-
-
-async def generate_docx(content: str, doc_type: str = "resume") -> bytes:
-    """
-    Generate a formatted .docx from plain text resume/cover letter.
-    Returns raw bytes of the .docx file.
-    """
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _sync_generate, content, doc_type)
 
 
 def _sync_generate(content: str, doc_type: str) -> bytes:
-    # Write content to temp file
+    _check_prereqs()
+    node = _node_bin()
+
     with tempfile.NamedTemporaryFile(mode='w', suffix='.txt',
                                      delete=False, encoding='utf-8') as tf:
         tf.write(content)
-        txt_path = tf.name
+        txt_path = Path(tf.name)
 
-    out_path = txt_path.replace('.txt', '.docx')
+    out_path = txt_path.with_suffix('.docx')
 
     try:
-        node = _find_node()
-        js_path = str(_JS_SCRIPT)
-
-        if not Path(js_path).exists():
-            raise FileNotFoundError(f"make_resume.js not found at {js_path}")
-
-        logger.info(f"Running: {node} {js_path} {doc_type}")
-
-        env = os.environ.copy()
-
-        # Help Node find the docx module if installed globally
-        docx_path = _find_docx_module()
-        if docx_path:
-            node_path = str(Path(docx_path).parent)
-            existing = env.get("NODE_PATH", "")
-            env["NODE_PATH"] = f"{node_path}:{existing}" if existing else node_path
-
         result = subprocess.run(
-            [node, js_path, doc_type, txt_path, out_path],
-            capture_output=True, text=True, timeout=45, env=env
+            [node, str(_JS), doc_type, str(txt_path), str(out_path)],
+            capture_output=True, text=True, timeout=60,
+            cwd=str(_BASE),          # run from project root so require() finds node_modules
         )
 
-        logger.info(f"Node stdout: {result.stdout.strip()}")
-        if result.stderr:
-            logger.warning(f"Node stderr: {result.stderr.strip()}")
+        stdout = result.stdout.strip()
+        stderr = result.stderr.strip()
+
+        if stdout:
+            logger.info(f'Node: {stdout}')
+        if stderr:
+            logger.warning(f'Node stderr: {stderr}')
 
         if result.returncode != 0:
-            raise RuntimeError(f"Node exited {result.returncode}: {result.stderr or result.stdout}")
+            raise RuntimeError(f'Node exited {result.returncode}: {stderr or stdout}')
 
-        if not Path(out_path).exists():
-            raise RuntimeError("DOCX file was not created by Node script.")
+        if not out_path.exists():
+            raise RuntimeError('Output .docx was not created')
 
-        with open(out_path, 'rb') as f:
-            data = f.read()
+        size = out_path.stat().st_size
+        if size < 200:
+            raise RuntimeError(f'Output .docx too small ({size} bytes) — generation failed')
 
-        if len(data) < 100:
-            raise RuntimeError("DOCX file is too small — generation may have failed.")
-
-        return data
+        logger.info(f'DOCX generated OK: {size} bytes')
+        return out_path.read_bytes()
 
     finally:
-        for p in [txt_path, out_path]:
-            try:
-                os.unlink(p)
-            except Exception:
-                pass
+        txt_path.unlink(missing_ok=True)
+        out_path.unlink(missing_ok=True)
+
+
+async def generate_docx(content: str, doc_type: str = 'resume') -> bytes:
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _sync_generate, content, doc_type)

@@ -1,0 +1,16 @@
+{
+  "name": "resumeai-bot",
+  "version": "1.0.0",
+  "description": "ResumeAI Bot docx generator",
+  "dependencies": {
+    "docx": "^9.5.0"
+  },
+  "main": "make_resume.js",
+  "devDependencies": {},
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
